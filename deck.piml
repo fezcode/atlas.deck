@@ -1,0 +1,20 @@
+(name) "Atlas Deck - Mission Control"
+(version) "0.1.0"
+(pads)
+  > (pad)
+    (key) "b"
+    (label) "Build Suite"
+    (cmd) "gobake build"
+    (color) "gold"
+
+  > (pad)
+    (key) "t"
+    (label) "Run Tests"
+    (cmd) "go test ./..."
+    (color) "cyan"
+
+  > (pad)
+    (key) "s"
+    (label) "Sync Hub"
+    (cmd) "atlas.meta.manifest-sync"
+    (color) "green"

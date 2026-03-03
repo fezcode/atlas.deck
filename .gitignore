@@ -1,0 +1,8 @@
+atlas.deck
+atlas.deck.exe
+vendor/
+*.log
+.idea/
+build/
+.vscode/
+*.exe~

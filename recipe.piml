@@ -1,0 +1,4 @@
+(name) atlas.deck
+(version) 0.1.0
+(description) Interactive TUI command deck for project workflows and automation.
+(license) MIT
