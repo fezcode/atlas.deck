@@ -95,9 +95,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		case "ctrl+x": // Kill running process
 			if m.Running && m.Cmd != nil && m.Cmd.Process != nil {
-				m.Cmd.Process.Kill()
-				m.Status = "Process terminated by user"
-				m.Logs = append(m.Logs, lipgloss.NewStyle().Foreground(lipgloss.Color("#ff5555")).Render(">>> [KILL] Process terminated by user"))
+				if runtime.GOOS == "windows" {
+					// Kill process tree on Windows
+					exec.Command("taskkill", "/F", "/T", "/PID", fmt.Sprintf("%d", m.Cmd.Process.Pid)).Run()
+				} else {
+					m.Cmd.Process.Kill()
+				}
+				m.Status = "Killed: " + m.RunningLabel
+				m.Logs = append(m.Logs, lipgloss.NewStyle().Foreground(RedColor).Bold(true).Render(fmt.Sprintf(">>> [KILL] Terminated: %s", m.RunningCmd)))
 				m.Viewport.SetContent(strings.Join(m.Logs, "\n"))
 				m.Viewport.GotoBottom()
 			}
@@ -236,15 +241,19 @@ func (m Model) View() string {
 	var pads []string
 	for _, pad := range m.Deck.Pads {
 		style := PadStyle
-		switch pad.Color {
-		case "gold":
-			style = style.BorderForeground(GoldColor)
-		case "cyan":
-			style = style.BorderForeground(BaseColor)
-		case "red":
-			style = style.BorderForeground(RedColor)
-		case "green":
-			style = style.BorderForeground(GreenColor)
+		if m.Running && pad.Key == m.LastKey {
+			style = ActivePadStyle
+		} else {
+			switch pad.Color {
+			case "gold":
+				style = style.BorderForeground(GoldColor)
+			case "cyan":
+				style = style.BorderForeground(BaseColor)
+			case "red":
+				style = style.BorderForeground(RedColor)
+			case "green":
+				style = style.BorderForeground(GreenColor)
+			}
 		}
 
 		content := fmt.Sprintf("%s\n\n%s", KeyStyle.Render("["+pad.Key+"]"), pad.Label)
@@ -269,13 +278,17 @@ func (m Model) View() string {
 
 	// Footer / Logs
 	s.WriteString("\n")
-	s.WriteString(StatusStyle.Render(fmt.Sprintf("Last Key: [%s] • Status: %s", m.LastKey, m.Status)))
+	statusLine := fmt.Sprintf("Last Key: [%s] • Status: %s", m.LastKey, m.Status)
+	if m.Running {
+		statusLine = fmt.Sprintf("Last Key: [%s] • %s: %s", m.LastKey, lipgloss.NewStyle().Foreground(BaseColor).Bold(true).Render("Running"), m.RunningCmd)
+	}
+	s.WriteString(StatusStyle.Render(statusLine))
 	s.WriteString("\n")
 	s.WriteString(m.Viewport.View())
 	
 	footerHints := "Press ctrl+c to quit • ctrl+l to clear logs"
 	if m.Running {
-		footerHints += " • " + lipgloss.NewStyle().Foreground(RedColor).Render("ctrl+x to kill process")
+		footerHints += " • " + lipgloss.NewStyle().Foreground(RedColor).Bold(true).Render("ctrl+x to kill process")
 	}
 	s.WriteString("\n" + StatusStyle.Render(footerHints))
 
