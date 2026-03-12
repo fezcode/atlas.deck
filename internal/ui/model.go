@@ -1,7 +1,9 @@
 package ui
 
 import (
+	"bufio"
 	"fmt"
+	"io"
 	"os/exec"
 	"runtime"
 	"strings"
@@ -21,10 +23,15 @@ type Model struct {
 	Height   int
 	LastKey  string
 
+	RunningLabel string
+	RunningCmd   string
+
 	// Logs
-	Viewport viewport.Model
-	Logs     []string
-	Spinner  spinner.Model
+	Viewport   viewport.Model
+	Logs       []string
+	Spinner    spinner.Model
+	OutputChan chan string
+	FinishChan chan error
 }
 
 func NewModel(deck *model.Deck) Model {
@@ -44,16 +51,33 @@ func NewModel(deck *model.Deck) Model {
 		Padding(0, 1)
 
 	return Model{
-		Deck:     deck,
-		Status:   status,
-		Spinner:  s,
-		Viewport: vp,
-		LastKey:  "None",
+		Deck:       deck,
+		Status:     status,
+		Spinner:    s,
+		Viewport:   vp,
+		LastKey:    "None",
+		OutputChan: make(chan string),
+		FinishChan: make(chan error),
 	}
 }
 
 func (m Model) Init() tea.Cmd {
 	return m.Spinner.Tick
+}
+
+type outputMsg string
+type finishMsg struct{ err error }
+
+func waitForOutput(ch chan string) tea.Cmd {
+	return func() tea.Msg {
+		return outputMsg(<-ch)
+	}
+}
+
+func waitForFinish(ch chan error) tea.Cmd {
+	return func() tea.Msg {
+		return finishMsg{err: <-ch}
+	}
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -66,8 +90,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		case "ctrl+l": // Clear logs
 			m.Logs = []string{}
-			m.Viewport.SetContent("")
-			m.Status = "Logs cleared"
+			if m.Running {
+				logLine := lipgloss.NewStyle().Foreground(lipgloss.Color("#bd93f9")).Render(fmt.Sprintf(">>> [%s] Executing: %s", m.LastKey, m.RunningCmd))
+				m.Logs = append(m.Logs, logLine)
+			} else {
+				m.Status = "Logs cleared"
+			}
+			m.Viewport.SetContent(strings.Join(m.Logs, "\n"))
 			return m, nil
 		default:
 			if !m.Running && m.Deck != nil {
@@ -75,15 +104,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					if msg.String() == pad.Key {
 						m.LastKey = pad.Key
 						m.Running = true
+						m.RunningLabel = pad.Label
+						m.RunningCmd = pad.Command
 						m.Status = fmt.Sprintf("Running: %s", pad.Label)
-						
-						// Add execution log and UPDATE VIEWPORT IMMEDIATELY
+
+						// Add execution log
 						logLine := lipgloss.NewStyle().Foreground(lipgloss.Color("#bd93f9")).Render(fmt.Sprintf(">>> [%s] Executing: %s", pad.Key, pad.Command))
 						m.Logs = append(m.Logs, logLine)
 						m.Viewport.SetContent(strings.Join(m.Logs, "\n"))
 						m.Viewport.GotoBottom()
-						
-						return m, m.runCommand(pad.Command)
+
+						return m, tea.Batch(
+							m.runCommand(pad.Command),
+							waitForOutput(m.OutputChan),
+							waitForFinish(m.FinishChan),
+						)
 					}
 				}
 			}
@@ -93,21 +128,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.Width = msg.Width
 		m.Height = msg.Height
 		m.Viewport.Width = msg.Width - 4
-		m.Viewport.Height = 10 
+		m.Viewport.Height = 10
 
 	case spinner.TickMsg:
 		var cmd tea.Cmd
 		m.Spinner, cmd = m.Spinner.Update(msg)
 		return m, cmd
 
-	case commandFinishedMsg:
-		m.Running = false
-		
-		// Add output to logs
-		if msg.out != "" {
-			m.Logs = append(m.Logs, msg.out)
-		}
+	case outputMsg:
+		m.Logs = append(m.Logs, string(msg))
+		m.Viewport.SetContent(strings.Join(m.Logs, "\n"))
+		m.Viewport.GotoBottom()
+		return m, waitForOutput(m.OutputChan)
 
+	case finishMsg:
+		m.Running = false
 		if msg.err != nil {
 			m.Status = fmt.Sprintf("Error: %v", msg.err)
 			m.Logs = append(m.Logs, lipgloss.NewStyle().Foreground(lipgloss.Color("#ff5555")).Render(fmt.Sprintf("!!! Error: %v", msg.err)))
@@ -115,7 +150,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.Status = "Completed"
 			m.Logs = append(m.Logs, lipgloss.NewStyle().Foreground(lipgloss.Color("#50fa7b")).Render("--- Finished Successfully ---"))
 		}
-		
+
 		m.Viewport.SetContent(strings.Join(m.Logs, "\n"))
 		m.Viewport.GotoBottom()
 		return m, nil
@@ -128,25 +163,33 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, tea.Batch(cmds...)
 }
 
-type commandFinishedMsg struct {
-	err error
-	out string
-}
-
 func (m Model) runCommand(command string) tea.Cmd {
 	return func() tea.Msg {
 		var cmd *exec.Cmd
 		if runtime.GOOS == "windows" {
-			cmd = exec.Command("powershell", "-Command", command)
+			cmd = exec.Command("powershell", "-NoProfile", "-Command", command)
 		} else {
 			cmd = exec.Command("sh", "-c", command)
 		}
 
-		out, err := cmd.CombinedOutput()
-		return commandFinishedMsg{
-			err: err,
-			out: string(out),
+		stdout, _ := cmd.StdoutPipe()
+		stderr, _ := cmd.StderrPipe()
+		multi := io.MultiReader(stdout, stderr)
+
+		if err := cmd.Start(); err != nil {
+			m.FinishChan <- err
+			return nil
 		}
+
+		go func() {
+			scanner := bufio.NewScanner(multi)
+			for scanner.Scan() {
+				m.OutputChan <- scanner.Text()
+			}
+			m.FinishChan <- cmd.Wait()
+		}()
+
+		return nil
 	}
 }
 
