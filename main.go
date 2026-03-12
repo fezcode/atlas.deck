@@ -1,6 +1,7 @@
 package main
 
 import (
+	_ "embed"
 	"fmt"
 	"os"
 
@@ -11,6 +12,9 @@ import (
 
 var Version = "dev"
 
+//go:embed deck.piml
+var defaultDeck []byte
+
 func main() {
 	if len(os.Args) > 1 {
 		arg := os.Args[1]
@@ -20,6 +24,15 @@ func main() {
 		}
 		if arg == "-h" || arg == "--help" || arg == "help" {
 			showHelp()
+			return
+		}
+		if arg == "-c" || arg == "--create" {
+			err := os.WriteFile("deck.piml", defaultDeck, 0644)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error creating deck.piml: %v\n", err)
+				os.Exit(1)
+			}
+			fmt.Println("Successfully created 'deck.piml' in the current directory.")
 			return
 		}
 	}
@@ -41,6 +54,7 @@ func showHelp() {
 	fmt.Printf("atlas.deck v%s - Interactive TUI command deck for project workflows.\n\n", Version)
 	fmt.Println("Usage:")
 	fmt.Println("  atlas.deck                Start the interactive TUI")
+	fmt.Println("  atlas.deck -c, --create   Create a 'deck.piml' file in the current directory")
 	fmt.Println("  atlas.deck -h, --help     Show this help information")
 	fmt.Println("  atlas.deck -v, --version  Show version information")
 	fmt.Println("\nBlueprint:")

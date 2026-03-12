@@ -37,6 +37,13 @@ Simply run the binary in any project directory containing a `deck.piml`:
 ./atlas.deck
 ```
 
+### 🚩 Options
+| Flag | Description |
+|------|-------------|
+| `-c`, `--create` | Create a default `deck.piml` file in the current directory. |
+| `-h`, `--help` | Show help information. |
+| `-v`, `--version` | Show version information. |
+
 ### 🕹️ Controls
 | Key | Action |
 |-----|--------|
